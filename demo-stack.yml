@@ -49,16 +49,10 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: !Sub '${AWS::StackName}-TaxPermissions'
+        - PolicyName: !Sub '${AWS::StackName}-SNSPermissions'
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
-                Action:
-                  - ce:GetCostAndUsage
-                  - support:CreateCase
-                  - support:DescribeCases
-                Resource: '*'
               - Effect: Allow
                 Action:
                   - sns:Publish
