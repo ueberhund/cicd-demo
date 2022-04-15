@@ -1,0 +1,236 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  This is a demonstration of a CI/CD pipeline that uses CloudFormation. You must specify the GitHub info of 
+  the repo that you want to be deployed. You must have a connection already set up to your repo (under 
+  CodePipeline -> Settings)
+
+Parameters:
+  PipelineName:
+    Description: A name for pipeline
+    Type: String
+  TemplateFileName:
+    Default: demo-stack.yml
+    Description: The file name of the CloudFormation template to deploy
+    Type: String
+  Email:
+    Description: The email address where CodePipeline sends pipeline notifications
+    Type: String
+  CodeStarConnectionArn:
+    Description: The CodeStar connection arn found under CodePipeline -> Connections
+    Type: String
+  RepositoryName: 
+    Description: The full repository name (repo/project)
+    Type: String 
+  BranchName:
+    Description: The branch name 
+    Type: String 
+    Default: main
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "CI/CD Configuration"
+        Parameters:
+          - PipelineName
+          - TemplateFileName
+          - Email
+      - Label:
+          default: "GitHub Configuration"
+        Parameters:
+          - CodeStarConnectionArn
+          - RepositoryName
+          - BranchName
+    ParameterLabels:
+      CodeStarConnectionArn:
+        default: "The CodeStar Connection Arn for GitHub"
+
+Resources:
+  ArtifactStoreBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  CodePipelineSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref Email
+          Protocol: email
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      ArtifactStore:
+        Location: !Ref 'ArtifactStoreBucket'
+        Type: S3
+      DisableInboundStageTransitions: []
+      Name: !Ref PipelineName
+      RoleArn: !GetAtt [PipelineRole, Arn]
+      Stages:
+        - Name: CodeSource 
+          Actions: 
+            - Name: SourceCode
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: 1
+              Configuration:
+                ConnectionArn: !Ref CodeStarConnectionArn
+                FullRepositoryId: !Ref RepositoryName
+                BranchName: !Ref BranchName
+                DetectChanges: true
+              OutputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+        - Name: TestStage
+          Actions:
+            - Name: CreateStack
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceCode
+              Configuration:
+                ActionMode: REPLACE_ON_FAILURE
+                RoleArn: !GetAtt [CFNRole, Arn]
+                StackName: !Sub TESTING-${PipelineName}
+                TemplatePath: !Sub "SourceCode::${TemplateFileName}"
+                Capabilities: CAPABILITY_IAM
+              RunOrder: '1'
+            - Name: ApproveTestStack
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+              Configuration:
+                NotificationArn: !Ref CodePipelineSNSTopic
+                CustomData: !Sub 'Do you want to create a change set against the production stack and delete the TESTING-${PipelineName} stack?'
+              RunOrder: '2'
+            - Name: DeleteTestStack
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: DELETE_ONLY
+                RoleArn: !GetAtt [CFNRole, Arn]
+                StackName: !Sub TESTING-${PipelineName}
+              RunOrder: '3'
+        - Name: ProdStage
+          Actions:
+            - Name: CreateChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceCode
+              Configuration:
+                ActionMode: CHANGE_SET_REPLACE
+                RoleArn: !GetAtt [CFNRole, Arn]
+                StackName: !Sub PRODUCTION-${PipelineName}
+                ChangeSetName: !Sub CHANGESET-${PipelineName}
+                TemplatePath: !Sub "SourceCode::${TemplateFileName}"
+                Capabilities: CAPABILITY_IAM
+              RunOrder: '1'
+            - Name: ApproveChangeSet
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+              Configuration:
+                NotificationArn: !Ref CodePipelineSNSTopic
+                CustomData: !Sub 'A new change set was created for the PRODUCTION-${PipelineName} stack. Do you want to implement the changes?'
+              RunOrder: '2'
+            - Name: ExecuteChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CHANGE_SET_EXECUTE
+                ChangeSetName: !Sub CHANGESET-${PipelineName}
+                RoleArn: !GetAtt [CFNRole, Arn]
+                StackName: !Sub PRODUCTION-${PipelineName}
+                Capabilities: CAPABILITY_IAM
+              RunOrder: '3'
+  CFNRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: 'sts:AssumeRole'
+          Effect: Allow
+          Principal:
+            Service: cloudformation.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyName: CloudFormationRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - 'ssm:GetParameters'
+                  - 'sns:CreateTopic'
+                  - 'sns:GetTopicAttributes'
+                  - 'sns:DeleteTopic'
+                  - 'sns:Subscribe'
+                  - 'iam:CreateRole'
+                  - 'iam:PutRolePolicy'
+                  - 'iam:DeleteRolePolicy'
+                  - 'iam:DetachRolePolicy'
+                  - 'iam:DeleteRole'
+                  - 'iam:AttachRolePolicy'
+                  - 'iam:GetRole'
+                  - 'iam:GetRolePolicy'
+                  - 'iam:PassRole'
+                  - 'lambda:GetFunction'
+                  - 'lambda:DeleteFunction'
+                  - 'lambda:CreateFunction'
+                Effect: Allow
+                Resource: '*'
+              
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: 'sts:AssumeRole'
+          Effect: Allow
+          Principal:
+            Service: codepipeline.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyName: CodePipelineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - 's3:*'
+                - 'cloudformation:CreateStack'
+                - 'cloudformation:DescribeStacks'
+                - 'cloudformation:DeleteStack'
+                - 'cloudformation:UpdateStack'
+                - 'cloudformation:CreateChangeSet'
+                - 'cloudformation:ExecuteChangeSet'
+                - 'cloudformation:DeleteChangeSet'
+                - 'cloudformation:DescribeChangeSet'
+                - 'cloudformation:SetStackPolicy'
+                - 'codestar-connections:UseConnection'
+                - 'iam:PassRole'
+                - 'sns:Publish'
+                Effect: Allow
+                Resource: '*'
