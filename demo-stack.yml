@@ -1,0 +1,72 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Demo stack to show how CI/CD pipelines work
+
+Parameters:
+  AlertEmail:
+    Type: AWS::SSM::Parameter::Value<String>
+    Description: The email address to send alerts and notifications to
+    Default: /notificationEmailAddress
+
+Resources:
+  LambdaDemoFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-demo
+      Code:
+        ZipFile:
+         |
+            import boto3
+            import os
+            
+            def lambda_handler(event, context):
+              sns = boto3.client('sns')
+              sns_topic_arn = os.environ['SNS_TOPIC_ARN']
+              response = sns.publish(TopicArn=sns_topic_arn,
+                                          Subject='Demo Message',
+                                          Message='Message was generated via CI/CD pipeline')
+                                          
+
+      Handler: "index.lambda_handler"
+      Runtime: python3.9
+      Timeout: 60
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref SNSTopic
+      Role: !GetAtt LambdaPermission.Arn
+      
+  LambdaPermission:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-TaxPermissions'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ce:GetCostAndUsage
+                  - support:CreateCase
+                  - support:DescribeCases
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref SNSTopic
+
+  SNSTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      Subscription:
+        - Endpoint: !Ref AlertEmail
+          Protocol: email
