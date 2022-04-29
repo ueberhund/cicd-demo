@@ -24,7 +24,7 @@ Resources:
               sns_topic_arn = os.environ['SNS_TOPIC_ARN']
               response = sns.publish(TopicArn=sns_topic_arn,
                                           Subject='Demo Message',
-                                          Message='Message was generated via CI/CD pipeline')
+                                          Message='Message was generated via CI/CD pipeline; Modified for demo!')
                                           
 
       Handler: "index.lambda_handler"
